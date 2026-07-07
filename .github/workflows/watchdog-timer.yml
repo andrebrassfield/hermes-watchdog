@@ -1,12 +1,9 @@
 name: Watchdog Timer
-# Every 10 minutes -- logs that the watchdog system is running
-# This is a keepalive marker and log aggregator
-# The actual circuit breaker lives in the agent (src/circuit_breaker.py)
 
 on:
   schedule:
     - cron: '*/10 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   timer:
@@ -14,18 +11,20 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            state/
+            src/
 
       - name: Log watchdog timer
         run: |
-          python3 << 'PYEOF'
+          python3 - << 'PYEOF'
           import json
-          import os
           from datetime import datetime, timezone
 
           now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-          
-          # Read latest state if available
           context_pct = 0
+
           try:
               with open("state/latest.jsonl") as f:
                   lines = f.readlines()
@@ -35,13 +34,5 @@ jobs:
           except:
               pass
 
-          print(f"[{now}] Watchdog timer fired -- context: {context_pct}%")
-          print(f"Run ID: {os.environ.get('GITHUB_RUN_ID', 'manual')}")
-          
-          # This is just a keepalive -- always succeeds
-          # The real monitoring is done by:
-          #   - context-monitor.yml (every 2 min)
-          #   - heartbeat.yml (every 5 min)
-          #   - src/circuit_breaker.py (inside agent)
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
+          print(f"[{now}] Watchdog timer -- context: {context_pct}%")
+          PYEOF
