@@ -3,7 +3,7 @@ name: Watchdog Timer
 on:
   schedule:
     - cron: '*/10 * * * *'
-  workflow_dispatch: {}
+  workflow_dispatch: ~
 
 jobs:
   timer:
@@ -14,7 +14,6 @@ jobs:
         with:
           sparse-checkout: |
             state/
-            src/
 
       - name: Log watchdog timer
         run: |
