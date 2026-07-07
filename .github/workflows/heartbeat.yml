@@ -1,11 +1,11 @@
 name: Heartbeat Monitor
-# Every 5 minutes — checks if the agent is responsive
-# If this fails, the sandbox may be down
+# Every 5 minutes -- checks if the agent is responsive
+# This workflow is READ-ONLY -- it only reads state and creates issues
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # Every 5 minutes
-  workflow_dispatch:          # Manual trigger
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   heartbeat:
@@ -13,14 +13,20 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .heartbeat
+            state/
 
       - name: Read previous heartbeat
         id: prev
         run: |
           if [ -f .heartbeat ]; then
-            echo "prev=$(cat .heartbeat)" >> $GITHUB_OUTPUT
+            PREV=$(cat .heartbeat)
+            echo "prev=$PREV" >> $GITHUB_OUTPUT
+            echo "has_prev=true" >> $GITHUB_OUTPUT
           else
-            echo "prev=null" >> $GITHUB_OUTPUT
+            echo "has_prev=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Compute heartbeat
@@ -29,42 +35,49 @@ jobs:
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "timestamp=$NOW" >> $GITHUB_OUTPUT
           echo "run_id=${{ github.run_id }}" >> $GITHUB_OUTPUT
-          
-          # Count consecutive misses (if prev heartbeat > 10 min ago)
-          if [ "${{ steps.prev.outputs.prev }}" != "null" ]; then
-            PREV_TIME=$(echo '${{ steps.prev.outputs.prev }}' | python3 -c "import sys,json; print(json.load(sys.stdin)['last_heartbeat'])")
-            AGE_SECS=$(python3 -c "import datetime; diff=datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat('$PREV_TIME'.replace('Z','+00:00')); print(int(diff.total_seconds()))")
-            if [ "$AGE_SECS" -gt 600 ]; then
-              MISSED=$(( (AGE_SECS // 300) - 1 ))
-            else
-              MISSED=0
-            fi
+
+          if [ "${{ steps.prev.outputs.has_prev }}" == "true" ]; then
+            python3 << 'PYEOF'
+            import json, sys, datetime
+            prev = json.loads('''${{ steps.prev.outputs.prev }}''')
+            last_ts = prev.get("last_heartbeat", "")
+            if last_ts:
+                try:
+                    last_time = datetime.datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    age = (now - last_time).total_seconds()
+                    missed = max(0, (age // 300) - 1)
+                    print(f"missed={missed}", file=sys.stderr)
+                    print(f"age_sec={int(age)}", file=sys.stderr)
+                    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                        f.write(f"missed={missed}\n")
+                        f.write(f"age_sec={int(age)}\n")
+                except Exception as e:
+                    print(f"Error: {e}", file=sys.stderr)
+                    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                        f.write("missed=0\nage_sec=0\n")
+            else:
+                with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                    f.write("missed=0\nage_sec=0\n")
+          else:
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write("missed=0\nage_sec=0\n")
+          PYEOF
           else
-            MISSED=0
+            echo "missed=0" >> $GITHUB_OUTPUT
+            echo "age_sec=0" >> $GITHUB_OUTPUT
           fi
-          echo "missed=$MISSED" >> $GITHUB_OUTPUT
 
-      - name: Write heartbeat file
+      - name: Log heartbeat
         run: |
-          cat > .heartbeat << 'EOF'
-          {
-            "last_heartbeat": "${{ steps.heartbeat.outputs.timestamp }}",
-            "consecutive_misses": ${{ steps.heartbeat.outputs.missed }},
-            "run_id": "${{ steps.heartbeat.outputs.run_id }}",
-            "status": "ok"
-          }
-          EOF
+          echo "Heartbeat: ${{ steps.heartbeat.outputs.timestamp }}"
+          echo "Consecutive misses: ${{ steps.heartbeat.outputs.missed }}"
+          echo "Run ID: ${{ steps.heartbeat.outputs.run_id }}"
 
-      - name: Commit heartbeat
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          file_pattern: .heartbeat
-          commit_message: "heartbeat ${{ steps.heartbeat.outputs.timestamp }}"
-
-      - name: Check for stale heartbeat
+      - name: Check stale heartbeat
         if: ${{ steps.heartbeat.outputs.missed >= 2 }}
         run: |
-          echo "⚠️ HEARTBEAT STALE — ${{ steps.heartbeat.outputs.missed }} consecutive misses detected"
+          echo "WARNING: ${{ steps.heartbeat.outputs.missed }} consecutive misses detected"
           echo "Sandbox may be unresponsive"
 
       - name: Create issue on stale heartbeat
@@ -75,18 +88,18 @@ jobs:
             github.rest.issues.create({
               owner: 'andrebrassfield',
               repo: 'hermes-watchdog',
-              title: '🚨 WATCHDOG CRITICAL: Sandbox heartbeat stale',
-              body: `## 🚨 Sandbox Heartbeat Stale
+              title: '[CRITICAL] Sandbox heartbeat stale -- ' + new Date().toISOString().slice(0,10),
+              body: '## Critical: Sandbox Heartbeat Stale
 
-**Consecutive misses:** ${{ steps.heartbeat.outputs.missed }}
-**Last heartbeat:** ${{ steps.prev.outputs.prev }}
-**Run ID:** ${{ steps.heartbeat.outputs.run_id }}
+**Consecutive misses:** ' + ${{ steps.heartbeat.outputs.missed }} + '
+**Last heartbeat:** ${{ steps.prev.outputs.prev }}' + '
+**Run ID:** ${{ steps.heartbeat.outputs.run_id }}' + '
 
 This likely means the MaxHermes sandbox is down or unreachable.
 
 **Manual intervention required.**
 
 ---
-*Auto-created by hermes-watchdog heartbeat monitor*`,
+*Auto-created by hermes-watchdog heartbeat monitor*',
               labels: ['watchdog-critical']
             })
