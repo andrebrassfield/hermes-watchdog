@@ -9,4 +9,61 @@ jobs:
   heartbeat:
     runs-on: ubuntu-latest
     steps:
-      - run: echo 'heartbeat'
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .heartbeat
+            state/
+
+      - name: Run heartbeat
+        run: |
+          python3 -c "
+import json
+from datetime import datetime, timezone
+
+prev_ts = None
+try:
+    with open('.heartbeat') as f:
+        prev = json.load(f)
+        prev_ts = prev.get('last_heartbeat', '')
+except:
+    pass
+
+now = datetime.now(timezone.utc)
+now_ts = now.isoformat().replace('+00:00', 'Z')
+
+missed = 0
+if prev_ts:
+    try:
+        pt = datetime.fromisoformat(prev_ts.replace('Z', '+00:00'))
+        age = (now - pt).total_seconds()
+        missed = max(0, int(age // 300) - 1)
+    except:
+        pass
+
+print(f'Heartbeat: {now_ts}')
+print(f'Missed: {missed}')
+"
+
+      - name: Check stale
+        run: |
+          echo "Checking heartbeat..."
+          if grep -q '"missed": [3-9]' <<< "$(python3 -c 'import json; print(json.dumps({}))')"; then
+            echo "WARNING: stale heartbeat detected"
+          fi
+
+      - name: Create issue on stale heartbeat
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: 'andrebrassfield',
+              repo: 'hermes-watchdog',
+              title: '[CRITICAL] Sandbox heartbeat stale -- ' + new Date().toISOString().slice(0,10),
+              body: '## Sandbox Heartbeat Stale
+
+MaxHermes sandbox may be down.',
+              labels: ['watchdog-critical']
+            })
