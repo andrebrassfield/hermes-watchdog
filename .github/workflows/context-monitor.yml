@@ -3,7 +3,7 @@ name: Context Monitor
 on:
   schedule:
     - cron: '*/2 * * * *'
-  workflow_dispatch: {}
+  workflow_dispatch: ~
 
 jobs:
   context-monitor:
@@ -17,25 +17,12 @@ jobs:
             src/
 
       - name: Run context monitor
-        id: monitor
         run: |
           python3 - << 'PYEOF'
-          import json
-          import os
-          import sys
+          import json, os, sys
           from datetime import datetime, timezone
 
           STATE_FILE = "state/latest.jsonl"
-          TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-          GITHUB_REPO = "andrebrassfield/hermes-watchdog"
-          GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-
-          WATCH_PCT = 50
-          WARN_PCT = 65
-          ALERT_PCT = 80
-          CRITICAL_PCT = 90
-
           context_pct = 0
           last_ts = None
           tool_active = False
@@ -49,14 +36,19 @@ jobs:
                   last_ts = last.get("ts", "")
                   tool_active = last.get("tool_call_active", False)
           except FileNotFoundError:
-              print(f"No state file found -- agent may not be running yet")
+              print(f"No state file -- agent may not be running")
               sys.exit(0)
           except Exception as e:
-              print(f"Error reading state: {e}")
+              print(f"Error: {e}")
               sys.exit(0)
 
           now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
           print(f"Context: {context_pct}% | Last: {last_ts}")
+
+          WATCH_PCT = 50
+          WARN_PCT = 65
+          ALERT_PCT = 80
+          CRITICAL_PCT = 90
 
           if context_pct >= CRITICAL_PCT:
               level = "CRITICAL"
@@ -71,62 +63,22 @@ jobs:
               sys.exit(0)
 
           print(f"ALERT: {level} -- Context at {context_pct}%")
-
-          # Send Telegram if configured
-          if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-              import urllib.request, urllib.parse
-              emoji = {"WATCH": "WATCH", "WARN": "WARN", "ALERT": "ALERT", "CRITICAL": "CRITICAL"}.get(level, "!")
-              msg = f"[{level}] Context {context_pct}% at {now[:16]}"
-              url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-              data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-              req = urllib.request.Request(
-                  url,
-                  data=urllib.parse.urlencode(data).encode(),
-                  headers={"Content-Type": "application/x-www-form-urlencoded"},
-                  method="POST"
-              )
-              try:
-                  with urllib.request.urlopen(req, timeout=10) as r:
-                      print(f"Telegram sent: {json.loads(r.read()).get('ok')}")
-              except Exception as e:
-                  print(f"Telegram error: {e}")
-
-          # Create GitHub Issue on ALERT+
-          if level in ("ALERT", "CRITICAL") and GITHUB_TOKEN:
-              import urllib.request
-              url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
-              labels = ["watchdog-alert"] if level == "ALERT" else ["watchdog-critical"]
-              data = json.dumps({
-                  "title": f"[{level}] Context at {context_pct}% -- {now[:16]}",
-                  "body": f"## {level}: Context Saturation
-
-**Context:** {context_pct}%
-**Last activity:** {last_ts}
-**Tool active:** {tool_active}
-**Time:** {now}
-
-Context is above {ALERT_PCT}%.
-
-**Action:** Check Telegram. Consider /reset if unresponsive.",
-                  "labels": labels
-              })
-              req = urllib.request.Request(
-                  url, data=data.encode(), headers={
-                      "Authorization": f"token {GITHUB_TOKEN}",
-                      "Accept": "application/vnd.github+json",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                      "Content-Type": "application/json"
-                  }, method="POST"
-              )
-              try:
-                  with urllib.request.urlopen(req, timeout=10) as r:
-                      result = json.loads(r.read())
-                      print(f"GitHub Issue: {result.get('html_url', '')}")
-              except Exception as e:
-                  print(f"GitHub issue error: {e}")
-
-          sys.exit(1 if level in ("ALERT", "CRITICAL") else 0)
+          sys.exit(1)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create issue on high context
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: 'andrebrassfield',
+              repo: 'hermes-watchdog',
+              title: '[ALERT] Context Monitor -- ' + new Date().toISOString().slice(0,10),
+              body: '## Context Monitor Alert
+
+Context may be high. Check Telegram for details.',
+              labels: ['watchdog-alert']
+            })
