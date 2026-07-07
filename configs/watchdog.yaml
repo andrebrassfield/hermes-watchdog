@@ -1,0 +1,114 @@
+# hermes-watchdog configuration
+# Thresholds, cooldowns, and feature flags
+
+# ── Context Monitoring ──────────────────────
+context:
+  # Alert thresholds (% of context window used)
+  thresholds:
+    watch:     50   # 50–64%: WATCH
+    warn:      65   # 65–79%: WARN
+    alert:     80   # 80–89%: ALERT  
+    critical:  90   # 90%+: CRITICAL
+
+  # How often to sample context (seconds)
+  sample_interval: 30        # When idle
+  sample_interval_busy: 5   # During active tool calls
+
+  # Context growth rate alert (%% per minute)
+  growth_rate:
+    watch:  5    # > 5%/min = watch
+    warn:   10   # > 10%/min = warn
+    alert:  15   # > 15%/min = alert
+
+  # Prediction: time-to-80% threshold (minutes)
+  # If ETA < this, escalate immediately
+  eta_threshold_min: 10
+
+# ── Tool Call Timing ──────────────────────────
+tool_timing:
+  # Duration thresholds (seconds)
+  thresholds:
+    watch:     60   # 60–89s: watch
+    warn:      90   # 90–119s: warn
+    alert:     120  # 120–179s: alert
+    break:     180  # 180s+: circuit break
+
+  # Per-tool overrides (seconds)
+  # These tools are known to be slow; adjust thresholds
+  tool_overrides:
+    web_search:              {warn: 60, alert: 120, break: 180}
+    extract_content:         {warn: 60, alert: 120, break: 180}
+    batch_web_search:        {warn: 90, alert: 150, break: 240}
+    git_operation:           {warn: 45, alert: 90, break: 150}
+
+  # Circuit breaker
+  circuit_breaker:
+    max_stalls: 3           # Open circuit after N stalls
+    cooldown_seconds: 60     # Keep circuit open for N seconds
+    reset_on_success: true   # Reset stall count on successful call
+
+# ── Activity Tracking ─────────────────────────
+activity:
+  # No-activity thresholds (seconds since last agent action)
+  thresholds:
+    watch:     90    # 90–119s: watch
+    warn:      120   # 120–149s: warn
+    alert:     150   # 150–179s: alert
+    critical:  180   # 180s+: critical (rescue)
+
+  # Heartbeat (external GitHub Actions)
+  heartbeat_interval: 300   # 5 min — GitHub Actions runs every 5 min
+  heartbeat_timeout:  600   # 10 min — if no heartbeat in 10 min, alert
+
+# ── Alert Cooldowns ──────────────────────────
+# Minimum time between alerts of the same level
+cooldowns:
+  watch:     300   # 5 min
+  warn:      180   # 3 min
+  alert:     600   # 10 min
+  critical:  1800  # 30 min
+
+# ── Telegram ──────────────────────────────────
+telegram:
+  enabled: true
+  bot_token_env: TELEGRAM_BOT_TOKEN
+  chat_id_env: TELEGRAM_CHAT_ID
+
+  # Message formatting
+  parse_mode: Markdown
+  disable_web_preview: true
+
+  # Rate limiting
+  max_per_minute: 3   # Max Telegram messages per minute
+
+# ── GitHub ─────────────────────────────────────
+github:
+  repo: andrebrassfield/hermes-watchdog
+  push_state_interval: 300  # Push state to GitHub every 5 min
+
+  snapshots:
+    enabled: true
+    on_warn: true          # Snapshot on WARN+
+    on_tool_stall: true    # Snapshot on tool break
+    max_age_hours: 72     # Prune snapshots older than 72h
+
+  issues:
+    create_on_alert: true   # Create GitHub Issue on ALERT
+    create_on_critical: true # Create GitHub Issue on CRITICAL
+
+# ── State Files ───────────────────────────────
+state_dir: ~/.hermes/watchdog
+
+files:
+  context_history: state.jsonl
+  tool_timing:     tool_timing.jsonl
+  activity:        activity.json
+  alerts:          alerts.json
+  health:          health.json
+  github_state:    github_state.json
+
+# ── Feature Flags ─────────────────────────────
+features:
+  predictive_compaction: false  # Future: ML-based prediction
+  auto_compaction:       false  # Future: auto-trigger LCM compaction
+  session_rescue:        false  # Future: automated rescue on critical
