@@ -15,7 +15,6 @@ jobs:
           sparse-checkout: |
             .heartbeat
             state/
-            src/
 
       - name: Read previous heartbeat
         id: prev
@@ -28,55 +27,50 @@ jobs:
             echo "has_prev=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Compute heartbeat
-        id: heartbeat
+      - name: Compute missed heartbeats
+        id: compute
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "timestamp=${NOW}" >> $GITHUB_OUTPUT
           echo "run_id=${{ github.run_id }}" >> $GITHUB_OUTPUT
 
+          MISSED=0
           if [ "${{ steps.prev.outputs.has_prev }}" == "true" ]; then
-            python3 - << 'PYEOF'
-            import json, sys, datetime, os
-            prev_raw = '''${{ steps.prev.outputs.prev }}'''
-            try:
-                prev = json.loads(prev_raw)
-                last_ts = prev.get("last_heartbeat", "")
-                if last_ts:
-                    last_time = datetime.datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    age = (now - last_time).total_seconds()
-                    missed = max(0, int(age // 300) - 1)
-                else:
-                    missed = 0
-            except Exception as e:
-                print(f"Error parsing prev: {e}", file=sys.stderr)
-                missed = 0
-            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                f.write(f"missed={missed}
+            AGE=$(python3 -c "
+import json, datetime
+try:
+    prev = json.loads('''${{ steps.prev.outputs.prev }}''')
+    last = prev.get('last_heartbeat', '')
+    if last:
+        lt = datetime.datetime.fromisoformat(last.replace('Z','+00:00'))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        print(int((now - lt).total_seconds()))
+    else:
+        print(0)
+except:
+    print(0)
 ")
-            except
-                print("Error", file=sys.stderr)
-                with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                    f.write("missed=0
-")
-          else
-            echo "missed=0" >> $GITHUB_OUTPUT
+            if [ -n "$AGE" ] && [ "$AGE" -gt 300 ]; then
+              MISSED=$(( AGE / 300 - 1 ))
+              if [ "$MISSED" -lt 0 ]; then MISSED=0; fi
+            fi
           fi
+          echo "missed=${MISSED}" >> $GITHUB_OUTPUT
+          echo "age_sec=${AGE:-0}" >> $GITHUB_OUTPUT
 
       - name: Log heartbeat
         run: |
-          echo "Heartbeat: ${{ steps.heartbeat.outputs.timestamp }}"
-          echo "Consecutive misses: ${{ steps.heartbeat.outputs.missed }}"
-          echo "Run ID: ${{ steps.heartbeat.outputs.run_id }}"
+          echo "Heartbeat: ${{ steps.compute.outputs.timestamp }}"
+          echo "Consecutive misses: ${{ steps.compute.outputs.missed }}"
 
       - name: Check stale heartbeat
-        if: steps.heartbeat.outputs.missed >= 2
+        if: ${{ steps.compute.outputs.missed >= 2 }}
         run: |
-          echo "WARNING: ${{ steps.heartbeat.outputs.missed }} consecutive misses detected"
+          echo "WARNING: ${{ steps.compute.outputs.missed }} consecutive misses detected"
+          echo "Sandbox may be unresponsive"
 
       - name: Create issue on stale heartbeat
-        if: steps.heartbeat.outputs.missed >= 3
+        if: ${{ steps.compute.outputs.missed >= 3 }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -86,8 +80,11 @@ jobs:
               title: '[CRITICAL] Sandbox heartbeat stale -- ' + new Date().toISOString().slice(0,10),
               body: '## Critical: Sandbox Heartbeat Stale
 
-**Consecutive misses:** ' + ${{ steps.heartbeat.outputs.missed }} + '
-**Last heartbeat:** ${{ steps.prev.outputs.prev }}
+**Consecutive misses:** ' + ${{ steps.compute.outputs.missed }} + '
+**Last heartbeat:**
+```
+' + ('${{ steps.prev.outputs.prev }}' || 'none') + '
+```
 
 This likely means the MaxHermes sandbox is down or unreachable.
 
