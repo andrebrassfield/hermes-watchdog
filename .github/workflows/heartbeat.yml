@@ -18,12 +18,12 @@ jobs:
       - name: Run heartbeat
         run: |
           python3 -c "
-import json, os
+import json
 from datetime import datetime, timezone
 
 prev_ts = None
 try:
-    with open('.heartbeat') as f:
+    with open(".heartbeat") as f:
         prev = json.load(f)
         prev_ts = prev.get('last_heartbeat', '')
 except:
@@ -42,10 +42,8 @@ if prev_ts:
         pass
 
 print(f'Heartbeat: {now_ts}')
-print(f'Missed intervals: {missed}')
-print(f'::set-output name=timestamp::{now_ts}')
-print(f'::set-output name=missed::{missed}')
-"
+print(f'Missed: {missed}')
+        "
 
       - name: Check stale
         if: steps.run.outputs.missed >= 2
@@ -60,8 +58,6 @@ print(f'::set-output name=missed::{missed}')
               owner: 'andrebrassfield',
               repo: 'hermes-watchdog',
               title: '[CRITICAL] Sandbox heartbeat stale -- ' + new Date().toISOString().slice(0,10),
-              body: '## Sandbox Heartbeat Stale
-
-MaxHermes sandbox may be down.',
+              body: '## Sandbox Heartbeat Stale\n\nMaxHermes sandbox may be down.',
               labels: ['watchdog-critical']
             })
