@@ -1,0 +1,43 @@
+# hermes-watchdog .gitignore
+
+# ── Local state (transient) ──────────────────
+*.jsonl
+!snapshots/*.json
+
+# ── Snapshot files (transient) ───────────────
+state/
+snapshots/*.json
+
+# ── Python cache ─────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.env
+.venv
+env/
+venv/
+
+# ── macOS ────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── IDE ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ─────────────────────────────────────
+*.log
+logs/
+
+# ── Secrets (NEVER commit) ──────────────────
+*.pem
+*.key
+secrets/
+.env
+.env.*
+config_secrets.yaml
