@@ -1,0 +1,16 @@
+# hermes-watchdog — Python dependencies
+# All stdlib — no external packages needed!
+
+# This project uses only Python standard library:
+#   - json
+#   - time
+#   - pathlib
+#   - urllib.request
+#   - collections (deque, defaultdict)
+#   - functools (wraps)
+
+# For running tests (optional):
+pytest>=7.0.0
+
+# For type hints (optional):
+typing-extensions>=4.0.0
