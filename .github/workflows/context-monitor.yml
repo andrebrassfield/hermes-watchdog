@@ -3,7 +3,7 @@ name: Context Monitor
 on:
   schedule:
     - cron: "*/2 * * * *"
-  workflow_dispatch: ~
+  workflow_dispatch:
 
 jobs:
   context-monitor:
