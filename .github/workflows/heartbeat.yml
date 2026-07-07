@@ -1,0 +1,92 @@
+name: Heartbeat Monitor
+# Every 5 minutes — checks if the agent is responsive
+# If this fails, the sandbox may be down
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # Every 5 minutes
+  workflow_dispatch:          # Manual trigger
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Read previous heartbeat
+        id: prev
+        run: |
+          if [ -f .heartbeat ]; then
+            echo "prev=$(cat .heartbeat)" >> $GITHUB_OUTPUT
+          else
+            echo "prev=null" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Compute heartbeat
+        id: heartbeat
+        run: |
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "timestamp=$NOW" >> $GITHUB_OUTPUT
+          echo "run_id=${{ github.run_id }}" >> $GITHUB_OUTPUT
+          
+          # Count consecutive misses (if prev heartbeat > 10 min ago)
+          if [ "${{ steps.prev.outputs.prev }}" != "null" ]; then
+            PREV_TIME=$(echo '${{ steps.prev.outputs.prev }}' | python3 -c "import sys,json; print(json.load(sys.stdin)['last_heartbeat'])")
+            AGE_SECS=$(python3 -c "import datetime; diff=datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat('$PREV_TIME'.replace('Z','+00:00')); print(int(diff.total_seconds()))")
+            if [ "$AGE_SECS" -gt 600 ]; then
+              MISSED=$(( (AGE_SECS // 300) - 1 ))
+            else
+              MISSED=0
+            fi
+          else
+            MISSED=0
+          fi
+          echo "missed=$MISSED" >> $GITHUB_OUTPUT
+
+      - name: Write heartbeat file
+        run: |
+          cat > .heartbeat << 'EOF'
+          {
+            "last_heartbeat": "${{ steps.heartbeat.outputs.timestamp }}",
+            "consecutive_misses": ${{ steps.heartbeat.outputs.missed }},
+            "run_id": "${{ steps.heartbeat.outputs.run_id }}",
+            "status": "ok"
+          }
+          EOF
+
+      - name: Commit heartbeat
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          file_pattern: .heartbeat
+          commit_message: "heartbeat ${{ steps.heartbeat.outputs.timestamp }}"
+
+      - name: Check for stale heartbeat
+        if: ${{ steps.heartbeat.outputs.missed >= 2 }}
+        run: |
+          echo "⚠️ HEARTBEAT STALE — ${{ steps.heartbeat.outputs.missed }} consecutive misses detected"
+          echo "Sandbox may be unresponsive"
+
+      - name: Create issue on stale heartbeat
+        if: ${{ steps.heartbeat.outputs.missed >= 3 }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: 'andrebrassfield',
+              repo: 'hermes-watchdog',
+              title: '🚨 WATCHDOG CRITICAL: Sandbox heartbeat stale',
+              body: `## 🚨 Sandbox Heartbeat Stale
+
+**Consecutive misses:** ${{ steps.heartbeat.outputs.missed }}
+**Last heartbeat:** ${{ steps.prev.outputs.prev }}
+**Run ID:** ${{ steps.heartbeat.outputs.run_id }}
+
+This likely means the MaxHermes sandbox is down or unreachable.
+
+**Manual intervention required.**
+
+---
+*Auto-created by hermes-watchdog heartbeat monitor*`,
+              labels: ['watchdog-critical']
+            })
