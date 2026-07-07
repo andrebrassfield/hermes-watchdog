@@ -3,7 +3,7 @@ name: Heartbeat Monitor
 on:
   schedule:
     - cron: '*/5 * * * *'
-  workflow_dispatch: ~
+  workflow_dispatch:
 
 jobs:
   heartbeat:
@@ -17,10 +17,37 @@ jobs:
             state/
 
       - name: Write heartbeat
-        run: python3 -c "from datetime import datetime, timezone; import json; f=open('.heartbeat','w'); json.dump({'last_heartbeat': datetime.now(timezone.utc).isoformat().replace('+00:00','Z')}, f); f.close(); print('heartbeat written')"
+        run: >-
+          python3 - << 'PYEOF'
+          from datetime import datetime, timezone
+          import json
+          ts = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+          with open('.heartbeat', 'w') as f:
+              json.dump({'last_heartbeat': ts}, f)
+          print('Heartbeat written:', ts)
+          PYEOF
 
       - name: Check stale
-        run: python3 -c "import json,sys; from datetime import datetime, timezone; prev_ts=None; [prev_ts:=json.loads(l).get('last_heartbeat',prev_ts) for l in open('.heartbeat')]; print('prev:', prev_ts); [sys.exit(1) if prev_ts and (datetime.now(timezone.utc)-datetime.fromisoformat(prev_ts.replace('Z','+00:00'))).total_seconds()>900 else None for l in [None]]; sys.exit(0)"
+        run: >-
+          python3 - << 'PYEOF'
+          import json, sys
+          from datetime import datetime, timezone
+          try:
+              with open('.heartbeat') as f:
+                  prev = json.load(f)
+              prev_ts = prev.get('last_heartbeat', '')
+              if prev_ts:
+                  pt = datetime.fromisoformat(prev_ts.replace('Z', '+00:00'))
+                  age = (datetime.now(timezone.utc) - pt).total_seconds()
+                  print('Heartbeat age:', age, 'seconds')
+                  if age > 900:
+                      print('STALE - more than 15 minutes old')
+                      sys.exit(1)
+              print('OK')
+          except Exception as e:
+              print('Error:', e)
+              sys.exit(0)
+          PYEOF
         continue-on-error: true
 
       - name: Create issue if stale
@@ -32,6 +59,8 @@ jobs:
               owner: 'andrebrassfield',
               repo: 'hermes-watchdog',
               title: '[CRITICAL] Sandbox heartbeat stale -- ' + new Date().toISOString().slice(0,10),
-              body: '## Sandbox Heartbeat Stale\n\nMaxHermes sandbox may be down.',
+              body: '## Sandbox Heartbeat Stale
+
+MaxHermes sandbox may be down.',
               labels: ['watchdog-critical']
             })
