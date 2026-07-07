@@ -1,77 +1,32 @@
 name: Session Recovery
-# Triggered MANUALLY or via repository_dispatch when CRITICAL is detected
-# Backs up state, creates rescue branch, attempts graceful recovery
-# NOT intended for automatic use -- manual intervention required for real recovery
 
 on:
-  workflow_dispatch:
-    inputs:
-      session_id:
-        description: 'Session ID to recover'
-        required: false
-        type: string
-      reason:
-        description: 'Reason for recovery'
-        required: false
-        default: 'manual'
-        type: string
+  workflow_dispatch: ~
   repository_dispatch:
-    types: [watchdog-critical, watchdog-rescue]
+    types: [watchdog-critical]
 
 jobs:
   rescue:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.inputs.reason != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Check for snapshots
-        id: snapshot
+      - name: Run session recovery
         run: |
           echo "Session recovery initiated"
-          echo "Reason: ${{ github.event.inputs.reason || github.event.inputs.reason }}"
-          echo "Session: ${{ github.event.inputs.session_id || 'unknown' }}"
           echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          
-          # List available snapshots
-          echo ""
-          echo "Available snapshots:"
-          if [ -d "snapshots" ] && [ "$(ls -1 snapshots/*.json 2>/dev/null | wc -l)" -gt 0 ]; then
-            ls -lt snapshots/*.json 2>/dev/null | head -5
-          else
-            echo "  No snapshots found"
-          fi
           echo ""
           echo "Latest state:"
           if [ -f "state/latest.jsonl" ]; then
-            tail -1 state/latest.jsonl | python3 -m json.tool 2>/dev/null || tail -1 state/latest.jsonl
+            tail -1 state/latest.jsonl
           else
-            echo "  No state file found"
+            echo "  No state file"
           fi
-
-      - name: Create rescue issue
-        if: ${{ github.event.inputs.reason != '' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.create({
-              owner: 'andrebrassfield',
-              repo: 'hermes-watchdog',
-              title: 'RESCUE: ' + (('${{ github.event.inputs.reason }}') || 'manual') + ' -- ' + new Date().toISOString().slice(0,10),
-              body: '## Rescue Report
-
-**Trigger:** ' + ('${{ github.event.inputs.reason }}' || 'manual') + '
-**Session:** ' + ('${{ github.event.inputs.session_id }}' || 'unknown') + '
-**Time:** ' + new Date().toISOString() + '
-
-### Recovery Steps
-1. Check latest snapshot in snapshots/
-2. Review state/latest.jsonl
-3. If resumable: load snapshot and continue
-4. If not: /reset and start fresh
-
----
-*Auto-created by hermes-watchdog session recovery*',
-              labels: ['watchdog-recovered']
-            })
+          echo ""
+          echo "Available snapshots:"
+          if [ -d "snapshots" ]; then
+            ls -lt snapshots/*.json 2>/dev/null | head -5 || echo "  No snapshots"
+          else
+            echo "  No snapshots directory"
+          fi
