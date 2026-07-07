@@ -1,37 +1,11 @@
 name: Watchdog Timer
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch: ~
+  workflow_dispatch:
 
 jobs:
   timer:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            state/
-
-      - name: Log watchdog timer
-        run: |
-          python3 - << 'PYEOF'
-          import json
-          from datetime import datetime, timezone
-
-          now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-          context_pct = 0
-
-          try:
-              with open("state/latest.jsonl") as f:
-                  lines = f.readlines()
-              if lines:
-                  last = json.loads(lines[-1])
-                  context_pct = last.get("context_percent", 0)
-          except:
-              pass
-
-          print(f"[{now}] Watchdog timer -- context: {context_pct}%")
-          PYEOF
+      - name: Log watchdog
+        run: echo "Watchdog timer active at $(date -u)"
