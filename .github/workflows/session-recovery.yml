@@ -1,32 +1,11 @@
 name: Session Recovery
 
 on:
-  workflow_dispatch: ~
-  repository_dispatch:
-    types: [watchdog-critical]
+  workflow_dispatch:
 
 jobs:
   rescue:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Run session recovery
-        run: |
-          echo "Session recovery initiated"
-          echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo ""
-          echo "Latest state:"
-          if [ -f "state/latest.jsonl" ]; then
-            tail -1 state/latest.jsonl
-          else
-            echo "  No state file"
-          fi
-          echo ""
-          echo "Available snapshots:"
-          if [ -d "snapshots" ]; then
-            ls -lt snapshots/*.json 2>/dev/null | head -5 || echo "  No snapshots"
-          else
-            echo "  No snapshots directory"
-          fi
+      - name: Log recovery
+        run: echo "Session recovery check at $(date -u)"
