@@ -1,10 +1,89 @@
 name: Heartbeat Monitor
 
 on:
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "heartbeat ok"
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .heartbeat
+            state/
+
+      - name: Write heartbeat
+        run: |
+          python3 - << 'PYEOF'
+          from datetime import datetime, timezone
+          import json
+          ts = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+          with open('.heartbeat', 'w') as f:
+              json.dump({'last_heartbeat': ts, 'sandbox': 'maxhermes'}, f)
+          print('Heartbeat:', ts)
+          PYEOF
+
+      - name: Commit heartbeat
+        run: |
+          python3 - << 'PYEOF'
+          import subprocess, datetime
+          ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+          result = subprocess.run(['git', 'config', '--global', 'user.email', 'hermes@maxhermes.ai'], capture_output=True)
+          result = subprocess.run(['git', 'config', '--global', 'user.name', 'MaxHermes Watchdog'], capture_output=True)
+          result = subprocess.run(['git', 'add', '.heartbeat'], capture_output=True)
+          result = subprocess.run(['git', 'commit', '-m', f'heartbeat: {ts}'], capture_output=True)
+          result = subprocess.run(['git', 'push'], capture_output=True)
+          print('Pushed heartbeat:', result.returncode)
+          PYEOF
+        env:
+          GH_TOKEN: ${{ secrets.HERMES_GITHUB_PAT }}
+
+      - name: Check stale
+        run: |
+          python3 - << 'PYEOF'
+          import json, sys
+          from datetime import datetime, timezone
+          try:
+              with open('.heartbeat') as f:
+                  prev = json.load(f)
+              prev_ts = prev.get('last_heartbeat', '')
+              if prev_ts:
+                  pt = datetime.fromisoformat(prev_ts.replace('Z', '+00:00'))
+                  age = (datetime.now(timezone.utc) - pt).total_seconds()
+                  print(f'Heartbeat age: {age:.0f}s')
+                  if age > 900:
+                      print('STALE -- more than 15 minutes old')
+                      sys.exit(1)
+              print('OK')
+          except Exception as e:
+              print(f'Error: {e}')
+              sys.exit(0)
+          PYEOF
+        continue-on-error: true
+
+      - name: Alert if stale
+        if: failure()
+        run: |
+          python3 - << 'PYEOF'
+          import urllib.request, json, os
+          token = os.environ.get('TELEGRAM_BOT_TOKEN')
+          chat = os.environ.get('TELEGRAM_CHAT_ID')
+          if not token or not chat:
+              print('Telegram secrets not set')
+              import sys; sys.exit(0)
+          msg = '⚠️ *Hermes Watchdog Alert*\n\nSandbox heartbeat is stale (>15 min old). MaxHermes may be down.'
+          data = json.dumps({'chat_id': chat, 'text': msg, 'parse_mode': 'Markdown'}).encode()
+          req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMessage', data=data, headers={'Content-Type': 'application/json'})
+          try:
+              with urllib.request.urlopen(req, timeout=10) as r:
+                  print('Telegram sent:', r.status)
+          except Exception as e:
+              print(f'Telegram error: {e}')
+          PYEOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
