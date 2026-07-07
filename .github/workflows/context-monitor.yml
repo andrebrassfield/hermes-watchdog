@@ -1,0 +1,82 @@
+name: Context Monitor
+
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch: ~
+
+jobs:
+  context-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            state/
+            src/
+
+      - name: Run context monitor
+        run: |
+          python3 - << "PYEOF"
+import json, os, sys
+from datetime import datetime, timezone
+
+STATE_FILE = "state/latest.jsonl"
+context_pct = 0
+last_ts = None
+tool_active = False
+
+try:
+    with open(STATE_FILE) as f:
+        lines = f.readlines()
+    if lines:
+        last = json.loads(lines[-1])
+        context_pct = last.get("context_percent", 0)
+        last_ts = last.get("ts", "")
+        tool_active = last.get("tool_call_active", False)
+except FileNotFoundError:
+    print("No state file -- agent may not be running")
+    sys.exit(0)
+except Exception as e:
+    print(f"Error: {e}")
+    sys.exit(0)
+
+now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+print(f"Context: {context_pct}% | Last: {last_ts}")
+
+WATCH_PCT = 50
+WARN_PCT = 65
+ALERT_PCT = 80
+CRITICAL_PCT = 90
+
+if context_pct >= CRITICAL_PCT:
+    level = "CRITICAL"
+elif context_pct >= ALERT_PCT:
+    level = "ALERT"
+elif context_pct >= WARN_PCT:
+    level = "WARN"
+elif context_pct >= WATCH_PCT:
+    level = "WATCH"
+else:
+    print(f"[OK] Context nominal: {context_pct}%")
+    sys.exit(0)
+
+print(f"ALERT: {level} -- Context at {context_pct}%")
+PYEOF
+
+      - name: Create issue on high context
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: "andrebrassfield",
+              repo: "hermes-watchdog",
+              title: "[ALERT] Context Monitor -- " + new Date().toISOString().slice(0,10),
+              body: "## Context Monitor Alert
+
+Context may be high. Check Telegram for details.",
+              labels: ["watchdog-alert"]
+            })
+
