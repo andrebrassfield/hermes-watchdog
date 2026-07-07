@@ -1,0 +1,78 @@
+name: Watchdog Timer Tracker
+# Tracks tool call durations from agent-reported state
+# Triggered on-demand by agent OR on schedule as fallback
+
+on:
+  workflow_dispatch:       # Manual / agent trigger
+  schedule:
+    - cron: '*/10 * * * *'  # Every 10 min as fallback
+
+jobs:
+  tool-timing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Read tool timing log
+        run: |
+          TIMING_FILE="tool-timing/latest.jsonl"
+          if [ -f "$TIMING_FILE" ]; then
+            echo "has_timing=true" >> $GITHUB_OUTPUT
+            # Show last 5 entries
+            echo "Last 5 tool calls:"
+            tail -5 "$TIMING_FILE"
+          else
+            echo "has_timing=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Analyze slow tool calls
+        if: ${{ steps.read.outputs.has_timing == 'true' }}
+        run: |
+          python3 << 'PYEOF'
+          import json
+          with open('tool-timing/latest.jsonl') as f:
+            lines = [json.loads(l) for l in f.readlines() if l.strip()]
+          
+          if not lines:
+            print("No tool timing data")
+            exit(0)
+          
+          # Find slow calls (> 90s)
+          slow = [l for l in lines if l.get('duration_s', 0) > 90]
+          stalled = [l for l in lines if l.get('duration_s', 0) > 150]
+          
+          if slow:
+            print(f"⚠️  {len(slow)} slow tool calls detected (> 90s)")
+            for s in slow[-3:]:
+              print(f"  - {s.get('tool_name')} ({s.get('duration_s')}s)")
+          
+          if stalled:
+            print(f"🚨 {len(stalled)} STALLED tool calls (> 150s) — CRITICAL")
+            for s in stalled:
+              print(f"  - {s.get('tool_name')} ({s.get('duration_s')}s) at {s.get('ts')}")
+          else:
+            print("✓ No stalled tool calls")
+          PYEOF
+
+      - name: Create issue on stalled tools
+        if: ${{ contains(steps.analyze.outputs, 'STALLED') }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: 'andrebrassfield',
+              repo: 'hermes-watchdog',
+              title: '🚨 WATCHDOG: Tool call stalled — intervention needed',
+              body: `## 🚨 Tool Call Stall Detected
+
+One or more tool calls exceeded 150 seconds without completing.
+
+See tool-timing/latest.jsonl for details.
+
+**Action:** Check agent status. May need /reset.
+
+---
+*Auto-created by hermes-watchdog tool tracker*`,
+              labels: ['watchdog-critical']
+            })
