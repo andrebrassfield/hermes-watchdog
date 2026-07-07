@@ -1,0 +1,10 @@
+name: Health Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Health check passed"
