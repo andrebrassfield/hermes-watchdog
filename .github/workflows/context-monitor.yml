@@ -1,0 +1,87 @@
+name: Context Monitor
+# Every 2 minutes — checks agent state from GitHub file
+# and fires alerts based on context % thresholds
+
+on:
+  schedule:
+    - cron: '*/2 * * * *'  # Every 2 minutes
+  workflow_dispatch:         # Manual trigger
+
+jobs:
+  context-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Read agent state from GitHub
+        id: read-state
+        run: |
+          # Read the latest state pushed by agent
+          # Agent pushes to hermes-watchdog/state/state.jsonl
+          STATE_FILE="state/latest.jsonl"
+          
+          if [ -f "$STATE_FILE" ]; then
+            LAST_LINE=$(tail -1 "$STATE_FILE")
+            echo "state=$LAST_LINE" >> $GITHUB_OUTPUT
+            echo "has_state=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_state=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Parse context %
+        if: ${{ steps.read-state.outputs.has_state == 'true' }}
+        id: parse
+        run: |
+          echo "Extracting context from state..."
+          # This would parse the JSONL line to get context_percent
+          # Format: {"ts":"...","context_percent":42,"tool_call_active":false,...}
+          python3 << 'PYEOF'
+          import json, sys
+          try:
+            with open('state/latest.jsonl') as f:
+              lines = f.readlines()
+            if lines:
+              last = json.loads(lines[-1])
+              pct = last.get('context_percent', 0)
+              print(f"context_pct={pct}")
+              print(f"tool_active={last.get('tool_call_active', False)}")
+              print(f"last_ts={last.get('ts', '')}")
+              sys.exit(0 if pct < 65 else 1)  # exit 1 if warning needed
+          except Exception as e:
+            print(f"parse_error={e}")
+            sys.exit(0)
+          PYEOF
+
+      - name: Log WATCH (context 50-64%)
+        if: ${{ failure() && steps.read-state.outputs.has_state == 'true' }}
+        run: |
+          echo "🟡 WATCH: Context at medium level — monitoring"
+
+      - name: Create ALERT issue on high context
+        if: ${{ steps.parse.outputs.context_pct >= 80 }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: 'andrebrassfield',
+              repo: 'hermes-watchdog',
+              title: '🟠 WATCHDOG ALERT: Context at ${{ steps.parse.outputs.context_pct }}%',
+              body: `## 🟠 Context Saturation Alert
+
+**Context:** ${{ steps.parse.outputs.context_pct }}%
+**Last activity:** ${{ steps.parse.outputs.last_ts }}
+
+Context is above 80%. Agent may need preemptive compaction.
+
+**Action:** Check Telegram for alert. Consider /reset if agent is unresponsive.
+
+---
+*Auto-created by hermes-watchdog context monitor*`,
+              labels: ['watchdog-alert']
+            })
+
+      - name: Update monitoring log
+        run: |
+          mkdir -p logs
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),${{ steps.parse.outputs.context_pct || 'N/A' }},${{ steps.read-state.outputs.has_state }}" >> logs/context-monitor.log
